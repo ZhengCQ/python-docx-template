@@ -7,7 +7,7 @@ Created : 2015-03-12
 import functools
 import io
 
-__version__ = '0.6.1'
+__version__ = '0.6.3'
 
 from lxml import etree
 from docx import Document
@@ -99,8 +99,12 @@ class DocxTemplate(object):
                          cellbg,src_xml,flags=re.DOTALL)
 
         # avoid {{r and {%r tags to strip MS xml tags too far
+        # ensure space preservation when splitting
+        src_xml = re.sub(r'<w:t>((?:(?!<w:t>).)*)({{r\s.*?}}|{%r\s.*?%})',
+                         r'<w:t xml:space="preserve">\1\2',
+                         src_xml,flags=re.DOTALL)
         src_xml = re.sub(r'({{r\s.*?}}|{%r\s.*?%})',
-                         r'</w:t></w:r><w:r><w:t>\1</w:t></w:r><w:r><w:t>',
+                         r'</w:t></w:r><w:r><w:t xml:space="preserve">\1</w:t></w:r><w:r><w:t xml:space="preserve">',
                          src_xml,flags=re.DOTALL)
 
         for y in ['tr', 'tc', 'p', 'r']:
@@ -116,7 +120,7 @@ class DocxTemplate(object):
         def v_merge_tc(m):
             def v_merge(m1):
                 return (
-                    '<w:vMerge w:val="{% if loop.first %}restart{% else %}continue{% endif %}"/>' +
+                   '{% if loop.length >1 %}<w:vMerge w:val="{% if loop.first %}restart{% else %}continue{% endif %}"/>{% endif %}' +
                     m1.group(1) +  # Everything between ``</w:tcPr>`` and ``<w:t>``.
                     "{% if loop.first %}" +
                     m1.group(2) +  # Everything before ``{% vm %}``.
@@ -130,6 +134,7 @@ class DocxTemplate(object):
                 m.group(),  # Everything between ``</w:tc>`` and ``</w:tc>`` with ``{% vm %}`` inside.
                 flags=re.DOTALL,
             )
+
         src_xml = re.sub(r'<w:tc[ >](?:(?!<w:tc[ >]).)*?{%\s*vm\s*%}.*?</w:tc[ >]',
                          v_merge_tc, src_xml, flags=re.DOTALL)
 
@@ -222,7 +227,7 @@ class DocxTemplate(object):
     def build_xml(self,context,jinja_env=None):
         xml = self.get_xml()
         xml = self.patch_xml(xml)
-        xml = self.render_xml(xml, context, jinja_env)
+        xml = self.render_xml(xml, context, jinja_env) #加载数据
         return xml
 
     def map_tree(self, tree):
@@ -459,6 +464,8 @@ class DocxTemplate(object):
                 DocxTemplate(docx_file).save(tmp_file)
                 tmp_file.seek(0)
                 docx_file.seek(0)
+                docx_file.truncate()
+                docx_file.seek(0)
 
             else:
                 tmp_file = '%s_docxtpl_before_replace_medias' % docx_file
@@ -554,13 +561,17 @@ class DocxTemplate(object):
         self.docx.save(filename,*args,**kwargs)
         self.post_processing(filename)
 
-    @property
-    def undeclared_template_variables(self):
+    def get_undeclared_template_variables(self, jinja_env=None):
         xml = self.get_xml()
         xml = self.patch_xml(xml)
-        env = Environment()
+        if jinja_env:
+            env = jinja_env
+        else:
+            env = Environment()
         parse_content = env.parse(xml)
         return meta.find_undeclared_variables(parse_content)
+
+    undeclared_template_variables = property(get_undeclared_template_variables)
 
 
 class Subdoc(object):
